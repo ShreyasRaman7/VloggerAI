@@ -48,3 +48,14 @@ Fix:
 4. Verify diagnostics endpoints:
    - `/api/health`
    - `/api/deploy-info` (shows active commit SHA/branch/environment)
+
+
+## Simple UI mode
+
+The homepage now focuses on a minimal flow:
+
+1. Paste Dropbox direct media link
+2. Enter prompt (or leave empty to use default)
+3. Click **Generate Vlog Project**
+
+Default prompt is prefilled with Spain + Italy + Bad Bunny **LA MuDANZA** vibe so you can run quickly without manual setup.

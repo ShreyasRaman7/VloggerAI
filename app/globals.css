@@ -13,3 +13,9 @@ button.secondary { background: #1f2937; }
 .small { opacity: 0.8; font-size: 13px; }
 .projectItem { padding: 12px; border: 1px solid #2f3850; border-radius: 12px; margin-bottom: 10px; }
 .badge { font-size: 12px; padding: 4px 8px; border-radius: 999px; border: 1px solid #4b5563; }
+
+
+.simpleWrap { max-width: 760px; padding-top: 36px; }
+.simpleCard { gap: 10px; }
+.simpleCard textarea { min-height: 110px; }
+.resultBox { border: 1px solid #2f3850; border-radius: 12px; padding: 12px; background: #0f1422; }
