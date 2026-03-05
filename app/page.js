@@ -6,6 +6,7 @@ const DEFAULT_PROMPT = 'Spain + Italy highlights, capcut-style travel template, 
 const WIDTH = 1080;
 const HEIGHT = 1920;
 const TARGET_SECONDS = 60;
+const MAX_MEDIA_LOAD = 64;
 
 function inferTheme(promptText) {
   const t = (promptText || '').toLowerCase();
@@ -13,6 +14,43 @@ function inferTheme(promptText) {
   if (t.includes('spain') && !t.includes('italy')) return 'Spain';
   if (t.includes('spain') && t.includes('italy')) return 'SpainItaly';
   return 'Custom';
+}
+
+function isImageAsset(asset) {
+  return asset.mime?.startsWith('image') || /\.(jpg|jpeg|png|webp)$/i.test(asset.filename || '');
+}
+
+function evenSample(items, count) {
+  if (count <= 0 || !items.length) return [];
+  if (count >= items.length) return [...items];
+  const picked = [];
+  for (let i = 0; i < count; i += 1) {
+    const idx = Math.floor((i * items.length) / count);
+    picked.push(items[idx]);
+  }
+  return picked;
+}
+
+function buildHighlightPlan(assets, promptText) {
+  const energy = /fast|hype|energetic|hard|glitch|viral/i.test(promptText) ? 'high' : 'balanced';
+  const targetSlots = energy === 'high' ? 34 : 28;
+
+  const ordered = [...assets].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  const videos = ordered.filter((a) => !isImageAsset(a));
+  const photos = ordered.filter((a) => isImageAsset(a));
+
+  const minVideoSlots = Math.min(videos.length, Math.max(6, Math.floor(targetSlots * 0.35)));
+  const chosenVideos = evenSample(videos, minVideoSlots);
+  const chosenPhotos = evenSample(photos, Math.max(0, targetSlots - chosenVideos.length));
+
+  const interleaved = [];
+  const maxLen = Math.max(chosenVideos.length, chosenPhotos.length);
+  for (let i = 0; i < maxLen; i += 1) {
+    if (chosenVideos[i]) interleaved.push(chosenVideos[i]);
+    if (chosenPhotos[i]) interleaved.push(chosenPhotos[i]);
+  }
+
+  return interleaved.slice(0, MAX_MEDIA_LOAD);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -61,12 +99,13 @@ export default function Home() {
     const mediaAssets = assets.filter((a) => a.kind === 'media');
     if (!mediaAssets.length) throw new Error('No media found after Dropbox import.');
 
+    const plan = buildHighlightPlan(mediaAssets, promptText);
     const loaded = [];
-    for (const a of mediaAssets.slice(0, 40)) {
+    for (const a of plan) {
       try {
         loaded.push(await loadAsset(a));
       } catch {
-        // ignore bad files
+        // skip unreadable files
       }
     }
     if (!loaded.length) throw new Error('Unable to load imported media files.');
@@ -89,16 +128,14 @@ export default function Home() {
         : ['Viva España', 'Sunset energy', 'Trip highlights'];
 
     recorder.start(1000);
-    const clipDur = Math.max(1.8, Math.min(3.1, TARGET_SECONDS / loaded.length));
+    const clipDur = Math.max(1.6, Math.min(2.8, TARGET_SECONDS / loaded.length));
     const start = performance.now();
     let subtitleIdx = 0;
 
     for (const file of loaded) {
-      const elapsed = (performance.now() - start) / 1000;
-      if (elapsed >= TARGET_SECONDS) break;
+      if ((performance.now() - start) / 1000 >= TARGET_SECONDS) break;
 
-      const isImage = file.mime.startsWith('image') || /\.(jpg|jpeg|png|webp)$/i.test(file.filename || '');
-      if (isImage) {
+      if (isImageAsset(file)) {
         const img = new Image();
         img.src = file.blobUrl;
         await new Promise((resolve, reject) => {
@@ -157,7 +194,7 @@ export default function Home() {
       const pData = await pRes.json();
       if (!pRes.ok) throw new Error(pData.error || 'Project creation failed');
 
-      setStatus('Loading Dropbox media...');
+      setStatus('Loading Dropbox media (large folder safe mode)...');
       const importRes = await fetch('/api/import/dropbox', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -166,14 +203,14 @@ export default function Home() {
       const importData = await importRes.json();
       if (!importRes.ok) throw new Error(importData.error || 'Dropbox import failed');
 
-      setStatus('Preparing capcut-style 60s highlight cut...');
+      setStatus('Scoring highlights + assembling 60s reel...');
       const projectRes = await fetch(`/api/projects/${pData.project.id}`);
       const projectData = await projectRes.json();
       if (!projectRes.ok) throw new Error(projectData.error || 'Project fetch failed');
 
       const url = await renderHighlights(projectData.project.assetsMeta || [], finalPrompt);
       setDownloadUrl(url);
-      setStatus(`Done. ${importData.importedCount || 0} file(s) imported and highlight reel generated.`);
+      setStatus(`Done. Imported ${importData.importedCount || 0} file(s); selected best moments for a 60s highlight cut.`);
     } catch (e) {
       setStatus(`Failed: ${e.message}`);
     } finally {
@@ -184,7 +221,7 @@ export default function Home() {
   return (
     <main className="container simpleWrap">
       <h1>Vlogger AI — Quick Reel</h1>
-      <p className="small">CapCut-style template flow: import Dropbox files and auto-cut a clean ~1 minute vertical highlight reel.</p>
+      <p className="small">CapCut-style template flow: import Dropbox files, auto-pick highlights, and cut a clean 1 minute vertical vlog.</p>
 
       <section className="card simpleCard grid">
         <label>Project name</label>

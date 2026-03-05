@@ -29,9 +29,24 @@ Open `http://localhost:3000`.
 
 - File links are imported directly.
 - Folder links that download as ZIP are extracted server-side and all supported media files are imported.
+- ZIP extraction uses `unzip` when available, and automatically falls back to Python `zipfile` in minimal environments.
 - Supported media: `.mp4 .mov .m4v .jpg .jpeg .png .webp`
 
 ## Vercel note
 
 - Vercel filesystem is ephemeral (`/tmp`).
 - For long-term storage/history, migrate media + metadata to durable services (Blob/S3 + DB).
+
+## Avoid merge issues (recommended)
+
+Use a short sync loop before every push:
+
+```bash
+git checkout main
+git pull --rebase origin main
+# make changes
+git add -A && git commit -m "..."
+git push origin main
+```
+
+If you use feature branches, rebase them onto latest `main` before opening/merging PRs.

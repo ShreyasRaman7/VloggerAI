@@ -38,42 +38,63 @@ async function saveResponseToFile(response, outPath) {
   });
 }
 
+async function extractZip(zipPath, extractDir) {
+  try {
+    await execFileAsync('unzip', ['-o', zipPath, '-d', extractDir]);
+    return;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  // Fallback for environments where `unzip` is not installed.
+  await execFileAsync('python3', [
+    '-c',
+    'import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])',
+    zipPath,
+    extractDir
+  ]);
+}
+
 async function importZip(projectId, zipPath, originalUrl) {
   const mediaDir = mediaFolderForProject(projectId);
   const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dropbox_extract_'));
-  await execFileAsync('unzip', ['-o', zipPath, '-d', extractDir]);
 
-  const imported = [];
-  const stack = [extractDir];
-  while (stack.length) {
-    const current = stack.pop();
-    for (const name of fs.readdirSync(current)) {
-      const full = path.join(current, name);
-      const stat = fs.statSync(full);
-      if (stat.isDirectory()) {
-        stack.push(full);
-        continue;
+  try {
+    await extractZip(zipPath, extractDir);
+
+    const imported = [];
+    const stack = [extractDir];
+    while (stack.length) {
+      const current = stack.pop();
+      for (const name of fs.readdirSync(current)) {
+        const full = path.join(current, name);
+        const stat = fs.statSync(full);
+        if (stat.isDirectory()) {
+          stack.push(full);
+          continue;
+        }
+        const ext = path.extname(name).toLowerCase();
+        if (!MEDIA_EXTS.has(ext) || ['.mp3', '.wav'].includes(ext)) continue;
+
+        const safeName = name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const outPath = path.join(mediaDir, `${Date.now()}_${safeName}`);
+        fs.copyFileSync(full, outPath);
+        const asset = addAsset(projectId, {
+          kind: 'media',
+          filePath: outPath,
+          filename: safeName,
+          bytes: fs.statSync(outPath).size,
+          source: 'dropbox-folder',
+          originalUrl
+        });
+        imported.push(asset);
       }
-      const ext = path.extname(name).toLowerCase();
-      if (!MEDIA_EXTS.has(ext) || ['.mp3', '.wav'].includes(ext)) continue;
-
-      const safeName = name.replace(/[^a-zA-Z0-9_.-]/g, '_');
-      const outPath = path.join(mediaDir, `${Date.now()}_${safeName}`);
-      fs.copyFileSync(full, outPath);
-      const asset = addAsset(projectId, {
-        kind: 'media',
-        filePath: outPath,
-        filename: safeName,
-        bytes: fs.statSync(outPath).size,
-        source: 'dropbox-folder',
-        originalUrl
-      });
-      imported.push(asset);
     }
-  }
 
-  fs.rmSync(extractDir, { recursive: true, force: true });
-  return imported;
+    return imported;
+  } finally {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+  }
 }
 
 export async function POST(req) {
@@ -116,7 +137,10 @@ export async function POST(req) {
           : 'ZIP downloaded but no compatible media files were found.'
       });
     } catch (error) {
-      return NextResponse.json({ error: `zip import failed: ${error.message}` }, { status: 500 });
+      return NextResponse.json({
+        error: `zip import failed: ${error.message}`,
+        hint: 'Install `unzip` or ensure python3 is available for ZIP fallback extraction.'
+      }, { status: 500 });
     }
   }
 
