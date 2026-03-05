@@ -13,11 +13,12 @@ Open `http://localhost:3000`.
 
 ## Quick flow (what you asked for)
 
-1. Paste a Dropbox share link (single file or folder/zip link)
+1. Paste a Dropbox share link (single file or folder/zip link) **or upload files manually**
 2. Add a text prompt (or leave blank for default Spain+Italy+La MuDANZA vibe)
 3. Click **Generate 60s Vlog**
-4. App imports media first, then auto-cuts a ~1 minute 9:16 highlight reel
-5. Download generated `.webm`
+4. App imports Dropbox media first, then auto-uploads local fallback files if needed
+5. It auto-cuts a ~1 minute 9:16 highlight reel with video-priority pacing
+6. Download generated `.webm`
 
 ## Defaults + templates
 

@@ -7,6 +7,7 @@ const WIDTH = 1080;
 const HEIGHT = 1920;
 const TARGET_SECONDS = 60;
 const MAX_MEDIA_LOAD = 64;
+const CHUNK_SIZE = 8 * 1024 * 1024;
 
 function inferTheme(promptText) {
   const t = (promptText || '').toLowerCase();
@@ -39,8 +40,9 @@ function buildHighlightPlan(assets, promptText) {
   const videos = ordered.filter((a) => !isImageAsset(a));
   const photos = ordered.filter((a) => isImageAsset(a));
 
-  const minVideoSlots = Math.min(videos.length, Math.max(6, Math.floor(targetSlots * 0.35)));
-  const chosenVideos = evenSample(videos, minVideoSlots);
+  // Guarantee strong motion in final vlog when user uploads many videos (e.g. 10 clips)
+  const mustHaveVideos = videos.length >= 10 ? 10 : Math.min(videos.length, Math.max(6, Math.floor(targetSlots * 0.35)));
+  const chosenVideos = evenSample(videos, mustHaveVideos);
   const chosenPhotos = evenSample(photos, Math.max(0, targetSlots - chosenVideos.length));
 
   const interleaved = [];
@@ -50,6 +52,7 @@ function buildHighlightPlan(assets, promptText) {
     if (chosenPhotos[i]) interleaved.push(chosenPhotos[i]);
   }
 
+  if (!interleaved.length) return evenSample(ordered, Math.min(targetSlots, ordered.length));
   return interleaved.slice(0, MAX_MEDIA_LOAD);
 }
 
@@ -89,15 +92,40 @@ async function loadAsset(asset) {
 
 export default function Home() {
   const [dropboxLink, setDropboxLink] = useState('');
+  const [manualFiles, setManualFiles] = useState([]);
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [projectName, setProjectName] = useState('Spain + Italy Highlights');
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('Paste Dropbox link → generate 60s highlight reel.');
+  const [status, setStatus] = useState('Use Dropbox link or upload files directly, then generate your 60s highlight reel.');
   const [downloadUrl, setDownloadUrl] = useState('');
+
+  const uploadFileInChunks = async (file, projectId) => {
+    const uploadId = `${projectId}_${file.name}_${file.size}_${Date.now()}`;
+    const totalParts = Math.ceil(file.size / CHUNK_SIZE);
+
+    for (let partIndex = 0; partIndex < totalParts; partIndex += 1) {
+      const start = partIndex * CHUNK_SIZE;
+      const end = Math.min(file.size, start + CHUNK_SIZE);
+      const chunk = file.slice(start, end);
+
+      const form = new FormData();
+      form.append('chunk', chunk, file.name);
+      form.append('uploadId', uploadId);
+      form.append('projectId', projectId);
+      form.append('filename', file.name);
+      form.append('partIndex', String(partIndex));
+      form.append('totalParts', String(totalParts));
+      form.append('totalSize', String(file.size));
+
+      const res = await fetch('/api/upload/chunk', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Upload failed for ${file.name}`);
+    }
+  };
 
   const renderHighlights = async (assets, promptText) => {
     const mediaAssets = assets.filter((a) => a.kind === 'media');
-    if (!mediaAssets.length) throw new Error('No media found after Dropbox import.');
+    if (!mediaAssets.length) throw new Error('No media found. Add Dropbox link or upload files manually.');
 
     const plan = buildHighlightPlan(mediaAssets, promptText);
     const loaded = [];
@@ -179,7 +207,10 @@ export default function Home() {
   };
 
   const generate = async () => {
-    if (!dropboxLink.trim()) return setStatus('Add your Dropbox link first.');
+    if (!dropboxLink.trim() && manualFiles.length === 0) {
+      return setStatus('Add a Dropbox link or upload files first.');
+    }
+
     setBusy(true);
     setDownloadUrl('');
     const finalPrompt = prompt.trim() || DEFAULT_PROMPT;
@@ -193,24 +224,47 @@ export default function Home() {
       });
       const pData = await pRes.json();
       if (!pRes.ok) throw new Error(pData.error || 'Project creation failed');
+      const projectId = pData.project.id;
 
-      setStatus('Loading Dropbox media (large folder safe mode)...');
-      const importRes = await fetch('/api/import/dropbox', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ projectId: pData.project.id, url: dropboxLink.trim() })
-      });
-      const importData = await importRes.json();
-      if (!importRes.ok) throw new Error(importData.error || 'Dropbox import failed');
+      let importedCount = 0;
+      if (dropboxLink.trim()) {
+        setStatus('Trying Dropbox import...');
+        const importRes = await fetch('/api/import/dropbox', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ projectId, url: dropboxLink.trim() })
+        });
+        const importData = await importRes.json();
+        if (importRes.ok) {
+          importedCount += Number(importData.importedCount || 0);
+        } else if (!manualFiles.length) {
+          throw new Error(importData.error || 'Dropbox import failed and no fallback files uploaded.');
+        }
+      }
 
-      setStatus('Scoring highlights + assembling 60s reel...');
-      const projectRes = await fetch(`/api/projects/${pData.project.id}`);
+      if (manualFiles.length) {
+        setStatus(`Uploading ${manualFiles.length} local file(s) as fallback/boost...`);
+        for (let i = 0; i < manualFiles.length; i += 1) {
+          setStatus(`Uploading ${i + 1}/${manualFiles.length}: ${manualFiles[i].name}`);
+          await uploadFileInChunks(manualFiles[i], projectId);
+          importedCount += 1;
+        }
+      }
+
+      setStatus('Scoring highlights + assembling 60s vlog...');
+      const projectRes = await fetch(`/api/projects/${projectId}`);
       const projectData = await projectRes.json();
       if (!projectRes.ok) throw new Error(projectData.error || 'Project fetch failed');
 
-      const url = await renderHighlights(projectData.project.assetsMeta || [], finalPrompt);
+      const assets = projectData.project.assetsMeta || [];
+      const videoCount = assets.filter((a) => a.kind === 'media' && !/\.(jpg|jpeg|png|webp)$/i.test(a.filename || '')).length;
+      if (videoCount < 3) {
+        setStatus('Warning: very few videos found. Upload more clips for the cleanest 1-minute vlog pacing.');
+      }
+
+      const url = await renderHighlights(assets, finalPrompt);
       setDownloadUrl(url);
-      setStatus(`Done. Imported ${importData.importedCount || 0} file(s); selected best moments for a 60s highlight cut.`);
+      setStatus(`Done. ${importedCount} file(s) ready. Reel generated with smart highlight selection and video-priority pacing.`);
     } catch (e) {
       setStatus(`Failed: ${e.message}`);
     } finally {
@@ -221,18 +275,27 @@ export default function Home() {
   return (
     <main className="container simpleWrap">
       <h1>Vlogger AI — Quick Reel</h1>
-      <p className="small">CapCut-style template flow: import Dropbox files, auto-pick highlights, and cut a clean 1 minute vertical vlog.</p>
+      <p className="small">One-shot mode: Dropbox first, local upload fallback, then auto-cut a clean 60s vertical vlog.</p>
 
       <section className="card simpleCard grid">
         <label>Project name</label>
         <input value={projectName} onChange={(e) => setProjectName(e.target.value)} />
 
-        <label>Dropbox file/folder share link</label>
+        <label>Dropbox file/folder share link (optional if uploading files)</label>
         <input
           value={dropboxLink}
           onChange={(e) => setDropboxLink(e.target.value)}
           placeholder="https://www.dropbox.com/scl/fo/..."
         />
+
+        <label>Fallback manual upload (images/videos)</label>
+        <input
+          type="file"
+          multiple
+          accept="image/*,video/*"
+          onChange={(e) => setManualFiles(Array.from(e.target.files || []))}
+        />
+        <p className="small">Selected: {manualFiles.length} file(s). If Dropbox ZIP fails, these are used automatically.</p>
 
         <label>Prompt (empty = Spain+Italy+La MuDANZA default)</label>
         <textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={DEFAULT_PROMPT} />
