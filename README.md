@@ -1,6 +1,6 @@
 # Vlogger AI Web App
 
-A web-first TikTok-style travel vlog app. No Python install is required for the main product flow.
+A web-first TikTok-style travel vlog app with a **quick CapCut-style template flow**.
 
 ## Run locally
 
@@ -11,51 +11,27 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-## What changed (important)
+## Quick flow (what you asked for)
 
-- Rendering is now **browser-side** (Web APIs + MediaRecorder), so users can export directly from the UI as `.webm`.
-- Server routes are used for project/edit metadata + chunked file storage + Dropbox import.
-- This avoids requiring Python in your Vercel webapp path.
+1. Paste a Dropbox share link (single file or folder/zip link)
+2. Add a text prompt (or leave blank for default Spain+Italy+La MuDANZA vibe)
+3. Click **Generate 60s Vlog**
+4. App imports media first, then auto-cuts a ~1 minute 9:16 highlight reel
+5. Download generated `.webm`
 
-## Current workflow
+## Defaults + templates
 
-1. Create a project
-2. Drag/drop media (large files are chunk uploaded for storage)
-3. Upload audio
-4. Select theme + prompt
-5. Click **Render in Browser (WebM)**
-6. Download your rendered output
+- Default prompt: Spain + Italy + Bad Bunny LA MuDANZA energy
+- Prompt still controls feel (Spain warm, Italy teal, mixed trip recap)
+- Text overlays and quick cuts are applied template-style for cleaner output
 
-## Dropbox notes
+## Dropbox behavior
 
-- Best with direct file links (not folder pages).
-- Imported Dropbox files are stored for project tracking; browser renderer currently uses files selected in the local browser session.
+- File links are imported directly.
+- Folder links that download as ZIP are extracted server-side and all supported media files are imported.
+- Supported media: `.mp4 .mov .m4v .jpg .jpeg .png .webp`
 
-## Vercel notes
+## Vercel note
 
-- App is Next.js and serves `/` correctly.
-- Server filesystem storage is ephemeral on Vercel (`/tmp`), so durable persistence should later move to Blob/S3 + DB.
-
-## 404 NOT_FOUND on Vercel (important)
-
-If Vercel shows `NOT_FOUND` and deployment source points to an old commit (for example `Initialize repository`), your latest app changes are not what production is serving.
-
-Fix:
-
-1. Merge/push latest commits to your production branch.
-2. In **Vercel → Project Settings → Git**, verify **Production Branch** is set correctly.
-3. Redeploy from the latest commit.
-4. Verify diagnostics endpoints:
-   - `/api/health`
-   - `/api/deploy-info` (shows active commit SHA/branch/environment)
-
-
-## Simple UI mode
-
-The homepage now focuses on a minimal flow:
-
-1. Paste Dropbox direct media link
-2. Enter prompt (or leave empty to use default)
-3. Click **Generate Vlog Project**
-
-Default prompt is prefilled with Spain + Italy + Bad Bunny **LA MuDANZA** vibe so you can run quickly without manual setup.
+- Vercel filesystem is ephemeral (`/tmp`).
+- For long-term storage/history, migrate media + metadata to durable services (Blob/S3 + DB).
