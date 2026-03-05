@@ -35,3 +35,16 @@ Open `http://localhost:3000`.
 
 - App is Next.js and serves `/` correctly.
 - Server filesystem storage is ephemeral on Vercel (`/tmp`), so durable persistence should later move to Blob/S3 + DB.
+
+## 404 NOT_FOUND on Vercel (important)
+
+If Vercel shows `NOT_FOUND` and deployment source points to an old commit (for example `Initialize repository`), your latest app changes are not what production is serving.
+
+Fix:
+
+1. Merge/push latest commits to your production branch.
+2. In **Vercel → Project Settings → Git**, verify **Production Branch** is set correctly.
+3. Redeploy from the latest commit.
+4. Verify diagnostics endpoints:
+   - `/api/health`
+   - `/api/deploy-info` (shows active commit SHA/branch/environment)
