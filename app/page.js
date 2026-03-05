@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const CHUNK = 8 * 1024 * 1024;
+const SIZE = { w: 1080, h: 1920 };
 
 async function chunkUpload({ projectId, file, isAudio = false }) {
   const totalParts = Math.ceil(file.size / CHUNK);
@@ -28,6 +29,161 @@ async function chunkUpload({ projectId, file, isAudio = false }) {
   }
 }
 
+const ext = (name = '') => name.toLowerCase().split('.').pop() || '';
+const isVideo = (name) => ['mp4', 'mov', 'webm', 'm4v'].includes(ext(name));
+
+function fitCover(srcW, srcH, dstW, dstH) {
+  const srcAspect = srcW / srcH;
+  const dstAspect = dstW / dstH;
+  if (srcAspect > dstAspect) {
+    const h = dstH;
+    const w = h * srcAspect;
+    return { x: (dstW - w) / 2, y: 0, w, h };
+  }
+  const w = dstW;
+  const h = w / srcAspect;
+  return { x: 0, y: (dstH - h) / 2, w, h };
+}
+
+async function wait(ms) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function exportInBrowser({ mediaFiles, audioFile, theme, prompt, onProgress }) {
+  if (!mediaFiles.length) throw new Error('Select at least one image/video for browser render.');
+
+  const canvas = document.createElement('canvas');
+  canvas.width = SIZE.w;
+  canvas.height = SIZE.h;
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  const stream = canvas.captureStream(30);
+
+  let audioCtx;
+  let bufferSource;
+  if (audioFile) {
+    audioCtx = new AudioContext();
+    const arrayBuffer = await audioFile.arrayBuffer();
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    const destination = audioCtx.createMediaStreamDestination();
+    bufferSource = audioCtx.createBufferSource();
+    bufferSource.buffer = audioBuffer;
+    bufferSource.connect(destination);
+    bufferSource.connect(audioCtx.destination);
+    destination.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
+  }
+
+  const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9,opus' });
+  const chunks = [];
+  recorder.ondataavailable = (e) => e.data?.size && chunks.push(e.data);
+
+  let running = true;
+  const drawOverlay = (title, sub) => {
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillRect(0, SIZE.h - 350, SIZE.w, 350);
+    ctx.font = 'bold 72px sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(title, 70, SIZE.h - 210);
+    ctx.font = 'bold 42px sans-serif';
+    ctx.fillText(sub, 70, SIZE.h - 140);
+  };
+
+  const grade = (imgData) => {
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i];
+      const g = d[i + 1];
+      const b = d[i + 2];
+      if (theme === 'Spain') {
+        d[i] = Math.min(255, r * 1.09);
+        d[i + 1] = Math.min(255, g * 1.03);
+        d[i + 2] = Math.max(0, b * 0.92);
+      } else if (theme === 'Italy') {
+        d[i] = Math.max(0, r * 0.92);
+        d[i + 1] = Math.min(255, g * 1.05);
+        d[i + 2] = Math.min(255, b * 1.08);
+      }
+    }
+  };
+
+  const labels = theme === 'Spain'
+    ? ['Madrid vibes 🇪🇸', '¡Viva España!', '2025 memories', '#travel #fyp']
+    : theme === 'Italy'
+      ? ['Ciao Roma 🇮🇹', 'Bellissimo!', 'Grazie 2025', '#travel #reels']
+      : ['Travel dump', '2025 recap', '#fyp'];
+
+  recorder.start(250);
+  if (bufferSource) bufferSource.start(0);
+
+  for (let i = 0; i < mediaFiles.length; i += 1) {
+    if (!running) break;
+    onProgress?.(`Rendering ${i + 1}/${mediaFiles.length}: ${mediaFiles[i].name}`);
+
+    const file = mediaFiles[i];
+    const url = URL.createObjectURL(file);
+    const title = labels[i % labels.length];
+    const subtitle = prompt ? prompt.slice(0, 36) : 'TikTok Travel Vlog';
+
+    if (isVideo(file.name)) {
+      const v = document.createElement('video');
+      v.src = url;
+      v.muted = true;
+      v.playsInline = true;
+      await v.play().catch(() => {});
+
+      const start = performance.now();
+      const maxMs = theme === 'Spain' ? 2400 : 3200;
+      while (performance.now() - start < maxMs && !v.ended) {
+        ctx.fillStyle = '#05070d';
+        ctx.fillRect(0, 0, SIZE.w, SIZE.h);
+        const box = fitCover(v.videoWidth || 1080, v.videoHeight || 1920, SIZE.w, SIZE.h);
+        ctx.drawImage(v, box.x, box.y, box.w, box.h);
+        const frame = ctx.getImageData(0, 0, SIZE.w, SIZE.h);
+        grade(frame);
+        ctx.putImageData(frame, 0, 0);
+        drawOverlay(title, subtitle);
+        await wait(1000 / 30);
+      }
+      v.pause();
+    } else {
+      const img = new Image();
+      img.src = url;
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+      const dur = theme === 'Spain' ? 2200 : 3200;
+      const start = performance.now();
+      while (performance.now() - start < dur) {
+        const t = (performance.now() - start) / dur;
+        ctx.fillStyle = '#05070d';
+        ctx.fillRect(0, 0, SIZE.w, SIZE.h);
+        const box = fitCover(img.width, img.height, SIZE.w, SIZE.h);
+        const z = 1 + 0.08 * t;
+        const w = box.w * z;
+        const h = box.h * z;
+        const x = box.x - (w - box.w) / 2;
+        const y = box.y - (h - box.h) / 2;
+        ctx.drawImage(img, x, y, w, h);
+        const frame = ctx.getImageData(0, 0, SIZE.w, SIZE.h);
+        grade(frame);
+        ctx.putImageData(frame, 0, 0);
+        drawOverlay(title, subtitle);
+        await wait(1000 / 30);
+      }
+    }
+
+    URL.revokeObjectURL(url);
+  }
+
+  recorder.stop();
+  await new Promise((resolve) => { recorder.onstop = resolve; });
+  running = false;
+
+  const blob = new Blob(chunks, { type: 'video/webm' });
+  return URL.createObjectURL(blob);
+}
+
 export default function Home() {
   const [projects, setProjects] = useState([]);
   const [activeId, setActiveId] = useState('');
@@ -37,6 +193,9 @@ export default function Home() {
   const [dropbox, setDropbox] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [localMedia, setLocalMedia] = useState([]);
+  const [localAudio, setLocalAudio] = useState(null);
+  const [renderUrl, setRenderUrl] = useState('');
 
   const active = useMemo(() => projects.find((p) => p.id === activeId), [projects, activeId]);
 
@@ -48,13 +207,6 @@ export default function Home() {
   };
 
   useEffect(() => { refresh(); }, []);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (active?.status === 'processing') refresh();
-    }, 3500);
-    return () => clearInterval(t);
-  }, [active?.status]);
 
   const createProject = async () => {
     setBusy(true);
@@ -75,7 +227,7 @@ export default function Home() {
     setMsg(`Uploading ${files.length} file(s)...`);
     try {
       for (const f of files) await chunkUpload({ projectId: activeId, file: f, isAudio });
-      setMsg('Upload complete');
+      setMsg('Upload complete (project metadata saved).');
       await refresh();
     } catch (e) {
       setMsg(e.message);
@@ -99,30 +251,31 @@ export default function Home() {
     await refresh();
   };
 
-  const render = async () => {
-    if (!activeId) return;
+  const browserRender = async () => {
     setBusy(true);
-    setMsg('Rendering... this can take time for large uploads.');
-    await fetch('/api/projects/' + activeId, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ theme, prompt })
-    });
-    const res = await fetch('/api/render', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ projectId: activeId, theme, customPrompt: prompt })
-    });
-    const data = await res.json();
-    setBusy(false);
-    setMsg(data.error || 'Render started');
-    await refresh();
+    setMsg('Browser rendering started... keep tab open for best stability.');
+    try {
+      const url = await exportInBrowser({
+        mediaFiles: localMedia,
+        audioFile: localAudio,
+        theme,
+        prompt,
+        onProgress: setMsg
+      });
+      if (renderUrl) URL.revokeObjectURL(renderUrl);
+      setRenderUrl(url);
+      setMsg('Render complete (WebM).');
+    } catch (e) {
+      setMsg(`Render failed: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <main className="container">
-      <h1>Vlogger AI — TikTok Travel Vlog Generator</h1>
-      <p className="small">Drop videos/photos + trend audio, pick Spain/Italy/Custom, and render cinematic 9:16 edits. Supports chunked uploads for large files.</p>
+      <h1>Vlogger AI — Web App (No Python install required)</h1>
+      <p className="small">Render happens in your browser using Web APIs. Server APIs keep project/edit metadata and uploaded assets.</p>
 
       <section className="card grid two">
         <div>
@@ -137,7 +290,7 @@ export default function Home() {
 
       <section className="card grid two">
         <div>
-          <h3>Projects</h3>
+          <h3>Projects (stored metadata)</h3>
           {(projects || []).map((p) => (
             <div key={p.id} className="projectItem" onClick={() => setActiveId(p.id)} style={{ cursor: 'pointer', outline: p.id === activeId ? '2px solid #4f46e5' : 'none' }}>
               <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -160,28 +313,35 @@ export default function Home() {
           <label>Prompt override</label>
           <textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
 
-          <div className="drop" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); onFileUpload([...e.dataTransfer.files], false); }}>
+          <div className="drop" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const arr = [...e.dataTransfer.files]; setLocalMedia((m) => [...m, ...arr]); onFileUpload(arr, false); }}>
             Drag/drop images/videos here
-            <div className="small">Or pick files</div>
-            <input type="file" multiple accept="image/*,video/*" onChange={(e) => onFileUpload([...e.target.files], false)} />
+            <div className="small">or pick files (also used for local browser render)</div>
+            <input type="file" multiple accept="image/*,video/*" onChange={(e) => { const arr = [...e.target.files]; setLocalMedia((m) => [...m, ...arr]); onFileUpload(arr, false); }} />
           </div>
 
           <div className="drop">
             Upload trend audio (mp3/wav)
-            <input type="file" accept="audio/*" onChange={(e) => onFileUpload([...e.target.files], true)} />
+            <input type="file" accept="audio/*" onChange={(e) => { const f = e.target.files?.[0] || null; setLocalAudio(f); if (f) onFileUpload([f], true); }} />
           </div>
 
-          <label>Dropbox direct link</label>
+          <label>Dropbox direct link (import to project storage)</label>
           <input value={dropbox} onChange={(e) => setDropbox(e.target.value)} placeholder="https://www.dropbox.com/s/.../file.mp4?dl=0" />
           <div className="row">
             <button className="secondary" disabled={busy} onClick={() => importDropbox(false)}>Import Dropbox Media</button>
             <button className="secondary" disabled={busy} onClick={() => importDropbox(true)}>Import Dropbox Audio</button>
           </div>
 
-          <button disabled={busy || !activeId} onClick={render}>Render TikTok Vlog</button>
-          {active?.status === 'done' && <a href={`/api/download/${active.id}`}><button>Download Rendered MP4</button></a>}
-          {active?.error && <p style={{ color: '#fca5a5' }}>{active.error}</p>}
+          <button disabled={busy || !localMedia.length} onClick={browserRender}>Render in Browser (WebM)</button>
+          {renderUrl && (
+            <div className="row">
+              <a href={renderUrl} download={`vlogger-ai-${Date.now()}.webm`}><button>Download Rendered WebM</button></a>
+              <video src={renderUrl} controls style={{ width: 200, borderRadius: 12 }} />
+            </div>
+          )}
+
+          <p className="small">Local render sources loaded: {localMedia.length} media file(s){localAudio ? ', audio ready' : ''}.</p>
           <p className="small">{msg}</p>
+          {active && <p className="small">Active project: {active.name}</p>}
         </div>
       </section>
     </main>

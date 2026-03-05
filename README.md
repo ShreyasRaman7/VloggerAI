@@ -1,6 +1,6 @@
 # Vlogger AI Web App
 
-Web app for creating TikTok-style travel vlogs from drag-drop uploads or Dropbox links.
+A web-first TikTok-style travel vlog app. No Python install is required for the main product flow.
 
 ## Run locally
 
@@ -9,21 +9,29 @@ npm install
 npm run dev
 ```
 
-Then open `http://localhost:3000`.
+Open `http://localhost:3000`.
 
-## Notes for Vercel
+## What changed (important)
 
-- This is a Next.js app and removes the 404 issue by providing a real `/` route.
-- Uploads/renders are stored in local filesystem (`.data` locally, `/tmp/vlogger-ai` on Vercel).
-- Vercel serverless storage is ephemeral, so completed renders are temporary unless you later add durable storage (Vercel Blob/S3/Postgres).
-- Python rendering uses `tiktok_travel_vlog_generator.py`; ensure runtime image includes Python + moviepy stack.
+- Rendering is now **browser-side** (Web APIs + MediaRecorder), so users can export directly from the UI as `.webm`.
+- Server routes are used for project/edit metadata + chunked file storage + Dropbox import.
+- This avoids requiring Python in your Vercel webapp path.
 
-## Supported workflow
+## Current workflow
 
 1. Create a project
-2. Upload media via drag-drop (chunked upload for large files)
-3. Upload an audio track (required)
-4. Pick theme and custom prompt
-5. Render and download output MP4
+2. Drag/drop media (large files are chunk uploaded for storage)
+3. Upload audio
+4. Select theme + prompt
+5. Click **Render in Browser (WebM)**
+6. Download your rendered output
 
-Dropbox import supports direct file links best. Shared folder links are less reliable depending on Dropbox response format.
+## Dropbox notes
+
+- Best with direct file links (not folder pages).
+- Imported Dropbox files are stored for project tracking; browser renderer currently uses files selected in the local browser session.
+
+## Vercel notes
+
+- App is Next.js and serves `/` correctly.
+- Server filesystem storage is ephemeral on Vercel (`/tmp`), so durable persistence should later move to Blob/S3 + DB.
